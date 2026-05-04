@@ -583,8 +583,8 @@ def bridge(sid, data):
     # Global declarations
     global autodrive, autodrive_bridge, cv_bridge, publishers, transform_broadcaster
     global real_mode, initpose_sent, initpose_reason
-    import pprint
-    pprint.pprint(data)
+    #import pprint
+    #pprint.pprint(data)
 
     # Wait for data to become available
     if data:
