@@ -32,7 +32,7 @@
 import argparse  # Command-line argument parsing
 import rospy  # ROS 1 client library for Python
 import tf2_ros  # ROS bindings for tf2 library to handle transforms
-import time
+from time import monotonic
 from std_msgs.msg import Int32, Float32, Header  # Int32, Float32 and Header message classes
 from geometry_msgs.msg import Point, TransformStamped  # Point and TransformStamped message classes
 from sensor_msgs.msg import JointState, Imu, LaserScan, Image  # JointState, Imu, LaserScan and Image message classes
@@ -49,6 +49,7 @@ from threading import Thread  # Thread-based parallelism
 # Python module imports
 from cv_bridge import CvBridge  # ROS bridge for opencv library to handle images
 from gevent import pywsgi  # Pure-Python gevent-friendly WSGI server
+from gevent import sleep as gevent_sleep  # Cooperative sleep for Socket.IO/gevent loop pacing
 from geventwebsocket.handler import WebSocketHandler  # Handler for WebSocket messages and lifecycle events
 import socketio  # Socket.IO realtime client and server
 import math  # Mathematical functions
@@ -148,6 +149,9 @@ initpose_x_covariance = 0.01
 initpose_y_covariance = 0.01
 initpose_yaw_covariance = 0.0076
 reinit_on_collision = True
+bridge_rate_hz = 40.0
+bridge_period_sec = 1.0 / bridge_rate_hz
+next_bridge_emit_time = monotonic()
 
 #########################################################
 # ROS 1 MESSAGE GENERATING FUNCTIONS
@@ -274,6 +278,24 @@ def send_static_transforms():
     Keeping this as a no-op prevents the bridge from adding a second map/odom/base_link chain.
     """
     return
+
+
+def pace_bridge_emit():
+    global next_bridge_emit_time
+
+    if bridge_rate_hz <= 0.0:
+        return
+
+    now = monotonic()
+    delay = next_bridge_emit_time - now
+    if delay > 0.0:
+        gevent_sleep(delay)
+        now = monotonic()
+
+    next_bridge_emit_time += bridge_period_sec
+    if next_bridge_emit_time < now:
+        next_bridge_emit_time = now + bridge_period_sec
+
 
 #########################################################
 # ROS 1 MESSAGE DEFINITIONS
@@ -669,7 +691,7 @@ def bridge(sid, data):
         # OUTGOING DATA
         ########################################################################
         # Vehicle and simulation commands
-        time.sleep(1/autodrive.lidar_scan_rate)
+        pace_bridge_emit()
         sio.emit('Bridge', data={'V1 Throttle': str(autodrive.throttle_command),
                                  'V1 Steering': str(autodrive.steering_command),
                                  'V1 Reset': str(autodrive.reset_command)
@@ -778,10 +800,12 @@ def main():
     # Global declarations
     global autodrive, autodrive_bridge, cv_bridge, publishers, transform_broadcaster, static_broadcaster, real_mode
     global initpose_map_tx, initpose_map_ty, initpose_yaw_offset
-    global reinit_on_collision
+    global reinit_on_collision, bridge_rate_hz, bridge_period_sec, next_bridge_emit_time
 
     parser = argparse.ArgumentParser(description='AutoDRIVE ROS 1 bridge')
     parser.add_argument('--real', action='store_true', help='Publish additional real-robot topics (/scan, /vesc/odom, /vesc/sensors/imu/raw)')
+    parser.add_argument('--bridge-rate-hz', dest='bridge_rate_hz', type=float, default=None,
+                        help='Maximum Socket.IO Bridge response rate. Use <= 0 to disable pacing.')
     parser.add_argument('--initpose-map-tx', '--initpose-map-from-ips-x',
                         dest='initpose_map_tx', type=float, default=None,
                         help='X translation from AutoDRIVE V1/world frame to Cartographer map frame')
@@ -818,6 +842,16 @@ def main():
         rospy.get_param('~initpose_map_from_ips_yaw', default_initpose_yaw_offset)
     )
     reinit_on_collision = rospy.get_param('~reinit_on_collision', True)
+    default_bridge_rate_hz = (
+        args.bridge_rate_hz if args.bridge_rate_hz is not None else bridge_rate_hz
+    )
+    bridge_rate_hz = float(rospy.get_param('~bridge_rate_hz', default_bridge_rate_hz))
+    if bridge_rate_hz > 0.0:
+        bridge_period_sec = 1.0 / bridge_rate_hz
+        next_bridge_emit_time = monotonic()
+    else:
+        bridge_period_sec = 0.0
+    rospy.loginfo("AutoDRIVE bridge emit pacing: %.3f Hz", bridge_rate_hz)
     rospy.loginfo(
         "AutoDRIVE /initialpose transform: map_x=-v1_y+%.3f map_y=v1_x+%.3f yaw=v1_yaw+%.3f rad",
         initpose_map_tx, initpose_map_ty, initpose_yaw_offset
