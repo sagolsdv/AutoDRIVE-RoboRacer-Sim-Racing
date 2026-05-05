@@ -147,6 +147,7 @@ initpose_yaw_offset = math.pi / 2.0
 initpose_x_covariance = 0.01
 initpose_y_covariance = 0.01
 initpose_yaw_covariance = 0.0076
+reinit_on_collision = True
 
 #########################################################
 # ROS 1 MESSAGE GENERATING FUNCTIONS
@@ -207,7 +208,7 @@ def create_laserscan_msg(ls, lidar_scan_rate, lidar_range_array, lidar_intensity
     if not timestamp:
         timestamp = rospy.Time.now()
     ls.header.stamp = timestamp
-    ls.header.frame_id = 'lidar'
+    ls.header.frame_id = 'laser'
     ls.angle_min = -2.35619  # Minimum angle of laser scan (0 degrees)
     ls.angle_max = 2.35619  # Maximum angle of laser scan (270 degrees)
     ls.angle_increment = 0.004363323  # Angular resolution of laser scan (0.25 degree)
@@ -249,38 +250,30 @@ def create_tf_msg(child_frame_id, parent_frame_id, position_tf, orientation_tf, 
 
 def broadcast_transforms(tf_broadcaster, autodrive, timestamp):
     tf_list = []
-    tf_list.append(create_tf_msg("roboracer_1", "world", autodrive.position, autodrive.orientation_quaternion, timestamp))  # Vehicle frame defined at center of rear axle
-    tf_list.append(create_tf_msg("left_encoder", "roboracer_1", np.asarray([0.0, 0.12, 0.0]), quaternion_from_euler(0.0, 120 * autodrive.encoder_angles[0] % 6.283, 0.0), timestamp))
-    tf_list.append(create_tf_msg("right_encoder", "roboracer_1", np.asarray([0.0, -0.12, 0.0]), quaternion_from_euler(0.0, 120 * autodrive.encoder_angles[1] % 6.283, 0.0), timestamp))
-    tf_list.append(create_tf_msg("ips", "roboracer_1", np.asarray([0.08, 0.0, 0.055]), np.asarray([0.0, 0.0, 0.0, 1.0]), timestamp))
+    parent_frame = "base_link" if real_mode else "roboracer_1"
     if not real_mode:
-        tf_list.append(create_tf_msg("imu", "roboracer_1", np.asarray([0.08, 0.0, 0.055]), np.asarray([0.0, 0.0, 0.0, 1.0]), timestamp))
-    tf_list.append(create_tf_msg("lidar", "roboracer_1", np.asarray([0.2733, 0.0, 0.096]), np.asarray([0.0, 0.0, 0.0, 1.0]), timestamp))
-    tf_list.append(create_tf_msg("front_camera", "roboracer_1", np.asarray([-0.015, 0.0, 0.15]), np.asarray([0, 0.0871557, 0, 0.9961947]), timestamp))
-    tf_list.append(create_tf_msg("front_left_wheel", "roboracer_1", np.asarray([0.33, 0.118, 0.0]), quaternion_from_euler(0.0, 0.0, np.arctan((2 * 0.141537 * np.tan(autodrive.steering)) / (2 * 0.141537 - 2 * 0.0765 * np.tan(autodrive.steering)))), timestamp))
-    tf_list.append(create_tf_msg("front_right_wheel", "roboracer_1", np.asarray([0.33, -0.118, 0.0]), quaternion_from_euler(0.0, 0.0, np.arctan((2 * 0.141537 * np.tan(autodrive.steering)) / (2 * 0.141537 + 2 * 0.0765 * np.tan(autodrive.steering)))), timestamp))
-    tf_list.append(create_tf_msg("rear_left_wheel", "roboracer_1", np.asarray([0.0, 0.118, 0.0]), quaternion_from_euler(0.0, autodrive.encoder_angles[0] % 6.283, 0.0), timestamp))
-    tf_list.append(create_tf_msg("rear_right_wheel", "roboracer_1", np.asarray([0.0, -0.118, 0.0]), quaternion_from_euler(0.0, autodrive.encoder_angles[1] % 6.283, 0.0), timestamp))
+        tf_list.append(create_tf_msg("roboracer_1", "world", autodrive.position, autodrive.orientation_quaternion, timestamp))  # Vehicle frame defined at center of rear axle
+    tf_list.append(create_tf_msg("left_encoder", parent_frame, np.asarray([0.0, 0.12, 0.0]), quaternion_from_euler(0.0, 120 * autodrive.encoder_angles[0] % 6.283, 0.0), timestamp))
+    tf_list.append(create_tf_msg("right_encoder", parent_frame, np.asarray([0.0, -0.12, 0.0]), quaternion_from_euler(0.0, 120 * autodrive.encoder_angles[1] % 6.283, 0.0), timestamp))
+    tf_list.append(create_tf_msg("ips", parent_frame, np.asarray([0.08, 0.0, 0.055]), np.asarray([0.0, 0.0, 0.0, 1.0]), timestamp))
+    if not real_mode:
+        tf_list.append(create_tf_msg("imu", parent_frame, np.asarray([0.08, 0.0, 0.055]), np.asarray([0.0, 0.0, 0.0, 1.0]), timestamp))
+        tf_list.append(create_tf_msg("lidar", parent_frame, np.asarray([0.2733, 0.0, 0.096]), np.asarray([0.0, 0.0, 0.0, 1.0]), timestamp))
+    tf_list.append(create_tf_msg("front_camera", parent_frame, np.asarray([-0.015, 0.0, 0.15]), np.asarray([0, 0.0871557, 0, 0.9961947]), timestamp))
+    tf_list.append(create_tf_msg("front_left_wheel", parent_frame, np.asarray([0.33, 0.118, 0.0]), quaternion_from_euler(0.0, 0.0, np.arctan((2 * 0.141537 * np.tan(autodrive.steering)) / (2 * 0.141537 - 2 * 0.0765 * np.tan(autodrive.steering)))), timestamp))
+    tf_list.append(create_tf_msg("front_right_wheel", parent_frame, np.asarray([0.33, -0.118, 0.0]), quaternion_from_euler(0.0, 0.0, np.arctan((2 * 0.141537 * np.tan(autodrive.steering)) / (2 * 0.141537 + 2 * 0.0765 * np.tan(autodrive.steering)))), timestamp))
+    tf_list.append(create_tf_msg("rear_left_wheel", parent_frame, np.asarray([0.0, 0.118, 0.0]), quaternion_from_euler(0.0, autodrive.encoder_angles[0] % 6.283, 0.0), timestamp))
+    tf_list.append(create_tf_msg("rear_right_wheel", parent_frame, np.asarray([0.0, -0.118, 0.0]), quaternion_from_euler(0.0, autodrive.encoder_angles[1] % 6.283, 0.0), timestamp))
     for tf in tf_list:
         tf_broadcaster.sendTransform(tf)
 
 
 def send_static_transforms():
     """
-    Publish once the static transforms to mirror the reference node:
-      world->map, map->odom, roboracer_1->base_link, base_link->scan, base_link->imu_link,
-      odom->base_link (identity) to satisfy odom->base_link lookups.
-    We keep our dynamic chain world->roboracer_1->lidar/... intact.
+    Static TFs are owned by the stack launch files and Cartographer in real mode.
+    Keeping this as a no-op prevents the bridge from adding a second map/odom/base_link chain.
     """
-    if static_broadcaster is None:
-        return
-    tf_list = []
-    #tf_list.append(create_tf_msg("map", "world", np.asarray([0.0, 0.0, 0.0]), np.asarray([0.0, 0.0, 0.0, 1.0])))
-    #tf_list.append(create_tf_msg("odom", "map", np.asarray([0.0, 0.0, 0.0]), np.asarray([0.0, 0.0, 0.0, 1.0])))
-    #tf_list.append(create_tf_msg("laser", "base_link", np.asarray([0.0, 0.0, 0.0]), np.asarray([0.0, 0.0, 0.0, 1.0])))
-    #tf_list.append(create_tf_msg("imu", "base_link", np.asarray([0.0, 0.0, 0.0]), np.asarray([0.0, 0.0, 0.0, 1.0])))
-    tf_list.append(create_tf_msg("roboracer_1", "base_link", np.asarray([0.0, 0.0, 0.0]), np.asarray([0.0, 0.0, 0.0, 1.0])))
-    static_broadcaster.sendTransform(tf_list)
+    return
 
 #########################################################
 # ROS 1 MESSAGE DEFINITIONS
@@ -643,8 +636,9 @@ def bridge(sid, data):
         if collision_detected:
             autodrive.throttle_command = 0.0
             autodrive.steering_command = 0.0
-            initpose_sent = False
-            initpose_reason = "collision_count"
+            if reinit_on_collision:
+                initpose_sent = False
+                initpose_reason = "collision_count"
         # IMU
         publish_imu_data(autodrive.orientation_quaternion, autodrive.angular_velocity, autodrive.linear_acceleration, timestamp)
 
@@ -691,6 +685,7 @@ def create_odom_msg(odom, position, orientation_quaternion, linear_velocity, ang
         timestamp = rospy.Time.now()
     odom.header.stamp = timestamp
     odom.header.frame_id = "odom"
+    odom.child_frame_id = "base_link"
 
 
     odom.pose.pose.position.x = position[0]
@@ -783,6 +778,7 @@ def main():
     # Global declarations
     global autodrive, autodrive_bridge, cv_bridge, publishers, transform_broadcaster, static_broadcaster, real_mode
     global initpose_map_tx, initpose_map_ty, initpose_yaw_offset
+    global reinit_on_collision
 
     parser = argparse.ArgumentParser(description='AutoDRIVE ROS 1 bridge')
     parser.add_argument('--real', action='store_true', help='Publish additional real-robot topics (/scan, /vesc/odom, /vesc/sensors/imu/raw)')
@@ -821,6 +817,7 @@ def main():
         '~initpose_yaw_offset',
         rospy.get_param('~initpose_map_from_ips_yaw', default_initpose_yaw_offset)
     )
+    reinit_on_collision = rospy.get_param('~reinit_on_collision', True)
     rospy.loginfo(
         "AutoDRIVE /initialpose transform: map_x=-v1_y+%.3f map_y=v1_x+%.3f yaw=v1_yaw+%.3f rad",
         initpose_map_tx, initpose_map_ty, initpose_yaw_offset
@@ -841,8 +838,6 @@ def main():
         publishers['pub_scan'] = rospy.Publisher('/scan', LaserScan, queue_size=10)
         publishers['pub_raw_imu'] = rospy.Publisher('/vesc/sensors/imu/raw', Imu, queue_size=1)
         #publishers['pub_ips_pose'] = rospy.Publisher('/ips/pose', PoseWithCovarianceStamped, queue_size=1)
-        # Publish static TFs once
-        send_static_transforms()
 
     callbacks = {
         '/autodrive/roboracer_1/throttle_command': callback_throttle_command,
